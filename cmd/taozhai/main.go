@@ -22,14 +22,14 @@ import (
 
 var (
 	// CLI flags
-	kubeconfig          *string
-	namespace           *string
-	inventoryNamespace  *string
-	bmcNamespace        *string
-	timeout             *time.Duration
-	bmcTimeout          *time.Duration
-	force               *bool
-	powerOff            *bool
+	kubeconfig         *string
+	namespace          *string
+	inventoryNamespace *string
+	bmcNamespace       *string
+	timeout            *time.Duration
+	bmcTimeout         *time.Duration
+	force              *bool
+	powerOff           *bool
 )
 
 func init() {
