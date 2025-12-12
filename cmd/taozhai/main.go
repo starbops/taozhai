@@ -170,7 +170,9 @@ func runIPReclamation(ctx context.Context, c *client.Client, targetIP string) er
 }
 
 func discoverMAC(ctx context.Context, c *client.Client, targetIP string) (string, error) {
-	discoverer := discovery.NewDiscoverer(c)
+	discoverer := discovery.NewDiscoverer(c).
+		SetTimeout(*timeout).
+		SetNamespace(*namespace)
 
 	macAddr, err := discoverer.DiscoverMACFromIP(ctx, targetIP)
 	if err != nil {

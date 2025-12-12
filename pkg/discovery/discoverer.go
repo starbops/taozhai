@@ -42,6 +42,18 @@ func NewDiscoverer(c *client.Client) *Discoverer {
 	}
 }
 
+// SetTimeout sets the timeout for pod completion
+func (d *Discoverer) SetTimeout(timeout time.Duration) *Discoverer {
+	d.timeout = timeout
+	return d
+}
+
+// SetNamespace sets the namespace for discovery pods
+func (d *Discoverer) SetNamespace(namespace string) *Discoverer {
+	d.namespace = namespace
+	return d
+}
+
 // DiscoverMACFromIP discovers the MAC address for a given IP
 func (d *Discoverer) DiscoverMACFromIP(ctx context.Context, targetIP string) (string, error) {
 	// Validate IP address to prevent command injection
