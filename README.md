@@ -18,6 +18,12 @@
 > 
 > – *taozhai*
 
+## Build
+
+```shell
+make build
+```
+
 ## Usage
 
 ```shell
