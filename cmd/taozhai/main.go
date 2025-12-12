@@ -27,6 +27,7 @@ var (
 	inventoryNamespace  *string
 	bmcNamespace        *string
 	timeout             *time.Duration
+	bmcTimeout          *time.Duration
 	force               *bool
 	powerOff            *bool
 )
@@ -43,6 +44,7 @@ func init() {
 	inventoryNamespace = flag.String("inventory-namespace", "tink-system", "namespace for Seeder Inventory CRs")
 	bmcNamespace = flag.String("bmc-namespace", "tink-system", "namespace for BMC Job CRs")
 	timeout = flag.Duration("timeout", 2*time.Minute, "timeout for pod completion")
+	bmcTimeout = flag.Duration("bmc-timeout", 5*time.Minute, "timeout for BMC Job completion")
 	force = flag.Bool("force", false, "skip confirmation prompt")
 	powerOff = flag.Bool("power-off", false, "actually create BMC power-off Job (default is dry-run)")
 }
@@ -204,10 +206,12 @@ func createBMCJob(ctx context.Context, c *client.Client, inventoryName string) e
 		return err
 	}
 
-	fmt.Printf("\n✓ Server will be powered off via BMC Job: %s\n", jobName)
-	fmt.Println("\nNote: The BMC Job will execute asynchronously.")
-	fmt.Println("Check the Job status in the cluster to verify completion.")
+	// Wait for Job to complete
+	if err := bmcManager.WaitForJobCompletion(ctx, jobName, *bmcNamespace, *bmcTimeout); err != nil {
+		return fmt.Errorf("BMC Job did not complete successfully: %w", err)
+	}
 
+	fmt.Println("\n✓ Server powered off successfully")
 	return nil
 }
 

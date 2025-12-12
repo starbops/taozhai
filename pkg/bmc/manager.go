@@ -118,3 +118,64 @@ func (m *Manager) DeleteJob(ctx context.Context, jobName, namespace string) erro
 	fmt.Printf("✓ BMC Job deleted: %s\n", jobName)
 	return nil
 }
+
+// WaitForJobCompletion waits for a BMC Job to complete or fail
+func (m *Manager) WaitForJobCompletion(ctx context.Context, jobName, namespace string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	fmt.Printf("\nWaiting for BMC Job to complete (timeout: %v)...\n", timeout)
+
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		job, err := m.client.DynamicClient.
+			Resource(BMCJobGVR).
+			Namespace(namespace).
+			Get(ctx, jobName, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to get BMC Job status: %w", err)
+		}
+
+		// Check conditions
+		conditions, found, err := unstructured.NestedSlice(job.Object, "status", "conditions")
+		if err != nil || !found {
+			// No conditions yet, keep waiting
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("timeout waiting for Job to complete")
+			case <-ticker.C:
+				continue
+			}
+		}
+
+		// Check for Completed or Failed conditions
+		for _, cond := range conditions {
+			condMap, ok := cond.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			condType, _ := condMap["type"].(string)
+			condStatus, _ := condMap["status"].(string)
+
+			if condType == "Completed" && condStatus == "True" {
+				fmt.Println("✓ BMC Job completed successfully")
+				return nil
+			}
+
+			if condType == "Failed" && condStatus == "True" {
+				return fmt.Errorf("BMC Job failed")
+			}
+		}
+
+		// Still running, continue waiting
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for Job to complete")
+		case <-ticker.C:
+			continue
+		}
+	}
+}
