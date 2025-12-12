@@ -17,10 +17,11 @@ const (
 )
 
 var (
+	// InventoryGVR is the GroupVersionResource for Seeder Inventory CRs
 	InventoryGVR = schema.GroupVersionResource{
-		Group:    "tinkerbell.org",
+		Group:    "metal.harvesterhci.io",
 		Version:  "v1alpha1",
-		Resource: "hardware",
+		Resource: "inventories",
 	}
 )
 
@@ -34,60 +35,53 @@ func NewFinder(c *client.Client) *Finder {
 	return &Finder{client: c}
 }
 
-// FindByMAC finds an inventory by MAC address
+// FindByMAC finds an inventory by MAC address and returns formatted output
 func (f *Finder) FindByMAC(ctx context.Context, macAddr string) (string, error) {
 	fmt.Printf("\nSearching for Inventory with MAC %s...\n", macAddr)
 
+	hardware, err := f.GetHardwareByMAC(ctx, macAddr)
+	if err != nil {
+		return "", err
+	}
+
+	return f.formatInventory(hardware), nil
+}
+
+// GetHardwareByMAC finds a Hardware CR by MAC address and returns the CR object
+func (f *Finder) GetHardwareByMAC(ctx context.Context, macAddr string) (*unstructured.Unstructured, error) {
 	list, err := f.client.DynamicClient.
 		Resource(InventoryGVR).
 		Namespace(TinkSystemNamespace).
 		List(ctx, metav1.ListOptions{})
 
 	if err != nil {
-		return "", fmt.Errorf("failed to list inventories: %w", err)
+		return nil, fmt.Errorf("failed to list inventories: %w", err)
 	}
 
 	normalizedMAC := normalizeMAC(macAddr)
 
 	for _, item := range list.Items {
 		if f.containsMAC(&item, normalizedMAC) {
-			return f.formatInventory(&item), nil
+			return &item, nil
 		}
 	}
 
-	return "", fmt.Errorf("no inventory found with MAC address %s", macAddr)
+	return nil, fmt.Errorf("no inventory found with MAC address %s", macAddr)
 }
 
 // containsMAC checks if the inventory contains the MAC address
 func (f *Finder) containsMAC(inventory *unstructured.Unstructured, macAddr string) bool {
-	// Check in spec.interfaces[].dhcp.mac or similar fields
-	interfaces, found, err := unstructured.NestedSlice(inventory.Object, "spec", "interfaces")
+	// Check .spec.managementInterfaceMacAddress for Seeder Inventory CRs
+	mgmtMAC, found, err := unstructured.NestedString(
+		inventory.Object,
+		"spec",
+		"managementInterfaceMacAddress",
+	)
 	if err != nil || !found {
 		return false
 	}
 
-	for _, iface := range interfaces {
-		ifaceMap, ok := iface.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		// Check dhcp.mac
-		if dhcp, found, _ := unstructured.NestedMap(ifaceMap, "dhcp"); found {
-			if mac, ok := dhcp["mac"].(string); ok && normalizeMAC(mac) == macAddr {
-				return true
-			}
-		}
-
-		// Check netboot.allowPXE (some CRDs store MAC differently)
-		if netboot, found, _ := unstructured.NestedMap(ifaceMap, "netboot"); found {
-			if mac, ok := netboot["mac"].(string); ok && normalizeMAC(mac) == macAddr {
-				return true
-			}
-		}
-	}
-
-	return false
+	return normalizeMAC(mgmtMAC) == macAddr
 }
 
 // formatInventory formats an inventory for display
@@ -99,29 +93,28 @@ func (f *Finder) formatInventory(inventory *unstructured.Unstructured) string {
 	output.WriteString(fmt.Sprintf("Name:      %s\n", name))
 	output.WriteString(fmt.Sprintf("Namespace: %s\n", namespace))
 
-	// Extract and display relevant fields
-	if metadata, found, _ := unstructured.NestedMap(inventory.Object, "spec", "metadata"); found {
-		output.WriteString("\nMetadata:\n")
-		for k, v := range metadata {
-			output.WriteString(fmt.Sprintf("  %s: %v\n", k, v))
-		}
+	// Extract and display Seeder Inventory fields
+	if mgmtMAC, found, _ := unstructured.NestedString(inventory.Object, "spec", "managementInterfaceMacAddress"); found {
+		output.WriteString(fmt.Sprintf("MAC:       %s\n", mgmtMAC))
 	}
 
-	if interfaces, found, _ := unstructured.NestedSlice(inventory.Object, "spec", "interfaces"); found {
-		output.WriteString("\nInterfaces:\n")
-		for i, iface := range interfaces {
-			ifaceMap, ok := iface.(map[string]interface{})
-			if !ok {
-				continue
+	if primaryDisk, found, _ := unstructured.NestedString(inventory.Object, "spec", "primaryDisk"); found {
+		output.WriteString(fmt.Sprintf("Disk:      %s\n", primaryDisk))
+	}
+
+	if arch, found, _ := unstructured.NestedString(inventory.Object, "spec", "arch"); found {
+		output.WriteString(fmt.Sprintf("Arch:      %s\n", arch))
+	}
+
+	// Show BMC spec if available
+	if bmcSpec, found, _ := unstructured.NestedMap(inventory.Object, "spec", "baseboardManagementSpec"); found {
+		output.WriteString("\nBMC Configuration:\n")
+		if connection, ok := bmcSpec["connection"].(map[string]interface{}); ok {
+			if host, ok := connection["host"].(string); ok {
+				output.WriteString(fmt.Sprintf("  Host: %s\n", host))
 			}
-			output.WriteString(fmt.Sprintf("  [%d]:\n", i))
-			if dhcp, found, _ := unstructured.NestedMap(ifaceMap, "dhcp"); found {
-				if mac, ok := dhcp["mac"].(string); ok {
-					output.WriteString(fmt.Sprintf("    MAC: %s\n", mac))
-				}
-				if ip, ok := dhcp["ip"].(string); ok {
-					output.WriteString(fmt.Sprintf("    IP:  %s\n", ip))
-				}
+			if port, ok := connection["port"].(float64); ok {
+				output.WriteString(fmt.Sprintf("  Port: %.0f\n", port))
 			}
 		}
 	}

@@ -2,180 +2,235 @@
 package main
 
 import (
-	"bytes"
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
+	"github.com/starbops/taozhai/pkg/bmc"
+	"github.com/starbops/taozhai/pkg/client"
+	"github.com/starbops/taozhai/pkg/discovery"
+	"github.com/starbops/taozhai/pkg/inventory"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
 )
 
-func main() {
-	var kubeconfig *string
+var (
+	// CLI flags
+	kubeconfig          *string
+	namespace           *string
+	inventoryNamespace  *string
+	bmcNamespace        *string
+	timeout             *time.Duration
+	force               *bool
+	powerOff            *bool
+)
+
+func init() {
+	// Initialize flags
 	if home := homedir.HomeDir(); home != "" {
 		kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "path to kubeconfig file")
 	} else {
 		kubeconfig = flag.String("kubeconfig", "", "path to kubeconfig file")
 	}
+
+	namespace = flag.String("namespace", "default", "namespace for discovery pods")
+	inventoryNamespace = flag.String("inventory-namespace", "tink-system", "namespace for Seeder Inventory CRs")
+	bmcNamespace = flag.String("bmc-namespace", "tink-system", "namespace for BMC Job CRs")
+	timeout = flag.Duration("timeout", 2*time.Minute, "timeout for pod completion")
+	force = flag.Bool("force", false, "skip confirmation prompt")
+	powerOff = flag.Bool("power-off", false, "actually create BMC power-off Job (default is dry-run)")
+}
+
+func main() {
 	flag.Parse()
 
+	// Validate arguments
 	args := flag.Args()
 	if len(args) != 1 {
-		fmt.Fprintf(os.Stderr, "Usage: taozhai [--kubeconfig PATH] <target-ip>\n")
+		printUsage()
 		os.Exit(1)
 	}
 	targetIP := args[0]
 
-	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
+	// Initialize Kubernetes client
+	c, err := initializeClient(*kubeconfig)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error building kubeconfig: %v\n", err)
-		os.Exit(1)
-	}
-
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating kubernetes client: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error initializing Kubernetes client: %v\n", err)
 		os.Exit(1)
 	}
 
 	ctx := context.Background()
 
-	// Create discovery pod
-	podName := fmt.Sprintf("taozhai-discovery-%d", time.Now().Unix())
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      podName,
-			Namespace: "default",
-		},
-		Spec: corev1.PodSpec{
-			RestartPolicy: corev1.RestartPolicyNever,
-			Containers: []corev1.Container{
-				{
-					Name:    "discovery",
-					Image:   "alpine:latest",
-					Command: []string{"/bin/sh", "-c"},
-					Args: []string{
-						fmt.Sprintf("ping -c 3 %s; ip neigh show %s", targetIP, targetIP),
-					},
-				},
-			},
-			HostNetwork: true,
-		},
-	}
-
-	fmt.Printf("Creating discovery pod %s...\n", podName)
-	_, err = clientset.CoreV1().Pods("default").Create(ctx, pod, metav1.CreateOptions{})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating pod: %v\n", err)
+	// Run the IP reclamation workflow
+	if err := runIPReclamation(ctx, c, targetIP); err != nil {
+		fmt.Fprintf(os.Stderr, "\nError: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Wait for pod to complete
-	fmt.Println("Waiting for pod to complete...")
-	if err := waitForPodCompletion(ctx, clientset, "default", podName, 2*time.Minute); err != nil {
-		fmt.Fprintf(os.Stderr, "Error waiting for pod: %v\n", err)
-		cleanupPod(ctx, clientset, "default", podName)
-		os.Exit(1)
-	}
-
-	// Get pod logs
-	logs, err := getPodLogs(ctx, clientset, "default", podName)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error getting pod logs: %v\n", err)
-		cleanupPod(ctx, clientset, "default", podName)
-		os.Exit(1)
-	}
-
-	// Extract MAC address from logs
-	macAddr := extractMACAddress(logs)
-	if macAddr == "" {
-		fmt.Fprintf(os.Stderr, "Could not extract MAC address from logs:\n%s\n", logs)
-		cleanupPod(ctx, clientset, "default", podName)
-		os.Exit(1)
-	}
-
-	fmt.Printf("Found MAC address: %s\n", macAddr)
-
-	// Cleanup discovery pod
-	cleanupPod(ctx, clientset, "default", podName)
-
-	// Search for inventory
-	fmt.Printf("\nSearching for Inventory with MAC %s...\n", macAddr)
-	inventory, err := findInventory(ctx, clientset, *kubeconfig, macAddr)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error finding inventory: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Println("\n" + inventory)
+	fmt.Println("\n✓ Done!")
 }
 
-func waitForPodCompletion(ctx context.Context, clientset *kubernetes.Clientset, namespace, name string, timeout time.Duration) error {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+func printUsage() {
+	fmt.Fprintf(os.Stderr, "Usage: taozhai [options] <target-ip>\n\n")
+	fmt.Fprintf(os.Stderr, "Discovers IP address hijackers and optionally powers them off via BMC.\n\n")
+	fmt.Fprintf(os.Stderr, "Options:\n")
+	flag.PrintDefaults()
+	fmt.Fprintf(os.Stderr, "\nExamples:\n")
+	fmt.Fprintf(os.Stderr, "  # Dry-run mode (shows what would happen)\n")
+	fmt.Fprintf(os.Stderr, "  taozhai 192.168.1.100\n\n")
+	fmt.Fprintf(os.Stderr, "  # Actually power off the hijacker\n")
+	fmt.Fprintf(os.Stderr, "  taozhai --power-off 192.168.1.100\n\n")
+	fmt.Fprintf(os.Stderr, "  # Skip confirmation prompt\n")
+	fmt.Fprintf(os.Stderr, "  taozhai --power-off --force 192.168.1.100\n")
+}
 
-	for {
-		pod, err := clientset.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			return err
-		}
+func initializeClient(kubeconfigPath string) (*client.Client, error) {
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build kubeconfig: %w", err)
+	}
 
-		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-			if pod.Status.Phase == corev1.PodFailed {
-				return fmt.Errorf("pod failed")
+	c, err := client.NewClient(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create client: %w", err)
+	}
+
+	return c, nil
+}
+
+func runIPReclamation(ctx context.Context, c *client.Client, targetIP string) error {
+	fmt.Println("=" + strings.Repeat("=", 60))
+	fmt.Println(" Taozhai - IP Address Hijacker Detection & Reclamation")
+	fmt.Println("=" + strings.Repeat("=", 60))
+	fmt.Printf("\nTarget IP: %s\n", targetIP)
+
+	// Phase 1: Discover MAC address via ARP
+	fmt.Println("\n" + strings.Repeat("-", 60))
+	fmt.Println("Phase 1: MAC Address Discovery")
+	fmt.Println(strings.Repeat("-", 60))
+
+	macAddr, err := discoverMAC(ctx, c, targetIP)
+	if err != nil {
+		return fmt.Errorf("MAC discovery failed: %w", err)
+	}
+
+	fmt.Printf("\n✓ Found MAC address: %s\n", macAddr)
+
+	// Phase 2: Find Inventory CR by MAC address
+	fmt.Println("\n" + strings.Repeat("-", 60))
+	fmt.Println("Phase 2: Inventory Search")
+	fmt.Println(strings.Repeat("-", 60))
+
+	inventory, err := findInventory(ctx, c, macAddr)
+	if err != nil {
+		return fmt.Errorf("inventory search failed: %w", err)
+	}
+
+	inventoryName := inventory.GetName()
+	fmt.Printf("\n✓ Found Inventory CR: %s\n", inventoryName)
+
+	// Phase 3: Create BMC power-off Job (or dry-run)
+	fmt.Println("\n" + strings.Repeat("-", 60))
+	fmt.Println("Phase 3: BMC Power Control")
+	fmt.Println(strings.Repeat("-", 60))
+
+	if *powerOff {
+		// Confirm with user unless --force is set
+		if !*force {
+			if !confirmPowerOff(inventoryName, macAddr, targetIP) {
+				fmt.Println("\nOperation cancelled by user.")
+				return nil
 			}
-			return nil
 		}
 
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(2 * time.Second):
+		// Actually create the BMC Job
+		// Note: Machine CR has the same name as Inventory CR
+		if err := createBMCJob(ctx, c, inventoryName); err != nil {
+			return fmt.Errorf("BMC Job creation failed: %w", err)
 		}
+	} else {
+		// Dry-run mode
+		fmt.Println("\n[DRY-RUN MODE]")
+		fmt.Printf("Would power off server: %s\n", inventoryName)
+		fmt.Printf("  MAC Address: %s\n", macAddr)
+		fmt.Printf("  IP Address:  %s\n", targetIP)
+		fmt.Println("\nTo actually power off the server, use the --power-off flag:")
+		fmt.Printf("  taozhai --power-off %s\n", targetIP)
 	}
+
+	return nil
 }
 
-func getPodLogs(ctx context.Context, clientset *kubernetes.Clientset, namespace, name string) (string, error) {
-	req := clientset.CoreV1().Pods(namespace).GetLogs(name, &corev1.PodLogOptions{})
-	logs, err := req.Stream(ctx)
+func discoverMAC(ctx context.Context, c *client.Client, targetIP string) (string, error) {
+	discoverer := discovery.NewDiscoverer(c)
+
+	macAddr, err := discoverer.DiscoverMACFromIP(ctx, targetIP)
 	if err != nil {
 		return "", err
 	}
-	defer logs.Close()
 
-	buf := new(bytes.Buffer)
-	_, err = io.Copy(buf, logs)
-	return buf.String(), err
+	return macAddr, nil
 }
 
-func extractMACAddress(logs string) string {
-	// Match MAC address pattern (e.g., aa:bb:cc:dd:ee:ff)
-	macRegex := regexp.MustCompile(`([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}`)
-	match := macRegex.FindString(logs)
-	return strings.ToLower(match)
+func findInventory(ctx context.Context, c *client.Client, macAddr string) (*unstructured.Unstructured, error) {
+	finder := inventory.NewFinder(c)
+
+	// Get the Inventory CR object
+	inv, err := finder.GetHardwareByMAC(ctx, macAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	// Display formatted inventory information
+	inventoryInfo, _ := finder.FindByMAC(ctx, macAddr)
+	fmt.Println("\nInventory Details:")
+	fmt.Println(inventoryInfo)
+
+	return inv, nil
 }
 
-func cleanupPod(ctx context.Context, clientset *kubernetes.Clientset, namespace, name string) {
-	fmt.Printf("Cleaning up pod %s...\n", name)
-	clientset.CoreV1().Pods(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+func createBMCJob(ctx context.Context, c *client.Client, inventoryName string) error {
+	bmcManager := bmc.NewManager(c)
+
+	// Machine CR name = Inventory CR name
+	jobName, err := bmcManager.CreatePowerOffJob(ctx, inventoryName, *bmcNamespace)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("\n✓ Server will be powered off via BMC Job: %s\n", jobName)
+	fmt.Println("\nNote: The BMC Job will execute asynchronously.")
+	fmt.Println("Check the Job status in the cluster to verify completion.")
+
+	return nil
 }
 
-func findInventory(ctx context.Context, clientset *kubernetes.Clientset, kubeconfig, macAddr string) (string, error) {
-	// Use kubectl command to search inventories
-	// This is a simplified version - you'd want to use dynamic client or CRD client
-	cmd := fmt.Sprintf("kubectl --kubeconfig=%s -n tink-system get inventories -o yaml | grep -i %s", kubeconfig, macAddr)
+func confirmPowerOff(inventoryName, macAddr, targetIP string) bool {
+	fmt.Println("\n" + strings.Repeat("!", 60))
+	fmt.Println(" WARNING: This will power off the server!")
+	fmt.Println(strings.Repeat("!", 60))
+	fmt.Printf("\nInventory:   %s\n", inventoryName)
+	fmt.Printf("MAC Address: %s\n", macAddr)
+	fmt.Printf("IP Address:  %s\n", targetIP)
+	fmt.Printf("\nThis action will:")
+	fmt.Printf("\n  1. Create a BMC power-off Job in namespace '%s'\n", *bmcNamespace)
+	fmt.Printf("  2. Power off the server to reclaim the IP address\n")
+	fmt.Printf("  3. Cause service disruption if this is the wrong server\n")
 
-	// For now, return instruction to run manually
-	// In production, use exec.Command or dynamic client
-	return fmt.Sprintf("Run: %s", cmd), nil
+	fmt.Print("\nAre you sure you want to proceed? (yes/no): ")
+
+	reader := bufio.NewReader(os.Stdin)
+	response, err := reader.ReadString('\n')
+	if err != nil {
+		return false
+	}
+
+	response = strings.TrimSpace(strings.ToLower(response))
+	return response == "yes" || response == "y"
 }

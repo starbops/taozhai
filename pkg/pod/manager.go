@@ -4,6 +4,7 @@ package pod
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -74,7 +75,7 @@ func (m *Manager) GetLogs(ctx context.Context, namespace, name string) (string, 
 	defer stream.Close()
 
 	buf := new(strings.Builder)
-	if _, err := buf.ReadFrom(stream); err != nil {
+	if _, err := io.Copy(buf, stream); err != nil {
 		return "", err
 	}
 

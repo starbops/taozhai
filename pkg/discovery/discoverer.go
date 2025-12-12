@@ -4,6 +4,7 @@ package discovery
 import (
 	"context"
 	"fmt"
+	"net"
 	"regexp"
 	"strings"
 	"time"
@@ -43,6 +44,11 @@ func NewDiscoverer(c *client.Client) *Discoverer {
 
 // DiscoverMACFromIP discovers the MAC address for a given IP
 func (d *Discoverer) DiscoverMACFromIP(ctx context.Context, targetIP string) (string, error) {
+	// Validate IP address to prevent command injection
+	if net.ParseIP(targetIP) == nil {
+		return "", fmt.Errorf("invalid IP address: %s", targetIP)
+	}
+
 	podName := fmt.Sprintf("taozhai-discovery-%d", time.Now().Unix())
 
 	podSpec := d.buildDiscoveryPodSpec(podName, targetIP)
@@ -88,10 +94,11 @@ func (d *Discoverer) buildDiscoveryPodSpec(name, targetIP string) *corev1.Pod {
 					Image:   DiscoveryImage,
 					Command: []string{"/bin/sh", "-c"},
 					Args: []string{
-						fmt.Sprintf("ping -c 3 %s; ip neighbor show %s", targetIP, targetIP),
+						fmt.Sprintf("ping -c 3 %s; ip neigh show %s", targetIP, targetIP),
 					},
 				},
 			},
+			HostNetwork: true,
 		},
 	}
 }
