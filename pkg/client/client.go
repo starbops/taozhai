@@ -9,7 +9,7 @@ import (
 
 // Client wraps Kubernetes clients
 type Client struct {
-	Clientset     *kubernetes.Clientset
+	Clientset     kubernetes.Interface
 	DynamicClient dynamic.Interface
 }
 
