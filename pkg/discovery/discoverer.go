@@ -69,7 +69,9 @@ func (d *Discoverer) DiscoverMACFromIP(ctx context.Context, targetIP string) (st
 	if err := d.podManager.Create(ctx, d.namespace, podSpec); err != nil {
 		return "", fmt.Errorf("failed to create pod: %w", err)
 	}
-	defer d.podManager.Delete(ctx, d.namespace, podName)
+	defer func() {
+		_ = d.podManager.Delete(ctx, d.namespace, podName)
+	}()
 
 	fmt.Println("Waiting for pod to complete...")
 	if err := d.podManager.WaitForCompletion(ctx, d.namespace, podName, d.timeout); err != nil {

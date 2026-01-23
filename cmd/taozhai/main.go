@@ -22,14 +22,13 @@ import (
 
 var (
 	// CLI flags
-	kubeconfig         *string
-	namespace          *string
-	inventoryNamespace *string
-	bmcNamespace       *string
-	timeout            *time.Duration
-	bmcTimeout         *time.Duration
-	force              *bool
-	powerOff           *bool
+	kubeconfig   *string
+	namespace    *string
+	bmcNamespace *string
+	timeout      *time.Duration
+	bmcTimeout   *time.Duration
+	force        *bool
+	powerOff     *bool
 )
 
 func init() {
@@ -41,7 +40,6 @@ func init() {
 	}
 
 	namespace = flag.String("namespace", "default", "namespace for discovery pods")
-	inventoryNamespace = flag.String("inventory-namespace", "tink-system", "namespace for Seeder Inventory CRs")
 	bmcNamespace = flag.String("bmc-namespace", "tink-system", "namespace for BMC Job CRs")
 	timeout = flag.Duration("timeout", 2*time.Minute, "timeout for pod completion")
 	bmcTimeout = flag.Duration("bmc-timeout", 5*time.Minute, "timeout for BMC Job completion")
