@@ -15,6 +15,7 @@ import (
 	"github.com/starbops/taozhai/pkg/client"
 	"github.com/starbops/taozhai/pkg/discovery"
 	"github.com/starbops/taozhai/pkg/inventory"
+	"github.com/starbops/taozhai/pkg/version"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
@@ -29,6 +30,7 @@ var (
 	bmcTimeout   *time.Duration
 	force        *bool
 	powerOff     *bool
+	versionFlag  *bool
 )
 
 func init() {
@@ -45,10 +47,17 @@ func init() {
 	bmcTimeout = flag.Duration("bmc-timeout", 5*time.Minute, "timeout for BMC Job completion")
 	force = flag.Bool("force", false, "skip confirmation prompt")
 	powerOff = flag.Bool("power-off", false, "actually create BMC power-off Job (default is dry-run)")
+	versionFlag = flag.Bool("version", false, "print version information and exit")
 }
 
 func main() {
 	flag.Parse()
+
+	// Handle --version flag
+	if *versionFlag {
+		fmt.Println(version.GetVersionString())
+		os.Exit(0)
+	}
 
 	// Validate arguments
 	args := flag.Args()
