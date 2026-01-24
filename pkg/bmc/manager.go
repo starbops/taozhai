@@ -14,6 +14,11 @@ import (
 
 var (
 	// BMCJobGVR is the GroupVersionResource for BMC Jobs
+	//
+	// API Stability: v1alpha1 (unstable)
+	//   - Breaking changes may occur in future versions
+	//   - Monitor upstream Tinkerbell for API graduation
+	//   - Upstream: https://github.com/tinkerbell/rufio
 	BMCJobGVR = schema.GroupVersionResource{
 		Group:    "bmc.tinkerbell.org",
 		Version:  "v1alpha1",

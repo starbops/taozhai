@@ -66,13 +66,17 @@ func (m *Manager) WaitForCompletion(ctx context.Context, namespace, name string,
 }
 
 // GetLogs retrieves logs from a pod
-func (m *Manager) GetLogs(ctx context.Context, namespace, name string) (string, error) {
+func (m *Manager) GetLogs(ctx context.Context, namespace, name string) (result string, err error) {
 	req := m.client.Clientset.CoreV1().Pods(namespace).GetLogs(name, &corev1.PodLogOptions{})
 	stream, err := req.Stream(ctx)
 	if err != nil {
 		return "", err
 	}
-	defer stream.Close()
+	defer func() {
+		if closeErr := stream.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
 
 	buf := new(strings.Builder)
 	if _, err := io.Copy(buf, stream); err != nil {
