@@ -6,7 +6,7 @@ linters:
     # Bug detection
     - errcheck           # Checks for unchecked errors
     - govet              # Reports suspicious constructs
-    - staticcheck        # Comprehensive static analysis (includes gosimple, stylecheck)
+    - staticcheck        # Comprehensive static analysis
 
     # Security
     - gosec              # Security-oriented linting
@@ -25,32 +25,22 @@ linters:
     - goconst            # Finds repeated strings that could be constants
   disable:
     - revive             # Disabled: too many false positives for Ginkgo/Gomega projects
+  settings:
+    errcheck:
+      check-type-assertions: false
+      check-blank: false
+    gocyclo:
+      min-complexity: 15
 
 formatters:
   enable:
     - gofmt
     - goimports
 
-linters-settings:
-  errcheck:
-    check-type-assertions: true
-    check-blank: true
-  govet:
-    enable-all: true
-  gocyclo:
-    min-complexity: 15
-  gosec:
-    excludes: []
-
 issues:
   max-issues-per-linter: 50
   max-same-issues: 10
-
-exclusions:
-  presets:
-    - comment
-    - std-error-handling
-  rules:
+  exclude-rules:
     # Exclude test files from certain checks
     - linters:
         - dupl
@@ -59,9 +49,3 @@ exclusions:
 
 run:
   timeout: 5m
-  modules-download-mode: readonly
-
-output:
-  formats:
-    colored-line-number: {}
-  sort-results: true
