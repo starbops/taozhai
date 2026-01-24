@@ -18,6 +18,11 @@ const (
 
 var (
 	// InventoryGVR is the GroupVersionResource for Seeder Inventory CRs
+	//
+	// API Stability: v1alpha1 (unstable)
+	//   - Breaking changes may occur in future versions
+	//   - Monitor upstream Harvester/Seeder for API graduation
+	//   - Upstream: https://github.com/harvester/seeder
 	InventoryGVR = schema.GroupVersionResource{
 		Group:    "metal.harvesterhci.io",
 		Version:  "v1alpha1",
