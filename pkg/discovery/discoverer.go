@@ -112,7 +112,6 @@ func (d *Discoverer) buildDiscoveryPodSpec(name, targetIP string) *corev1.Pod {
 					},
 				},
 			},
-			HostNetwork: true,
 		},
 	}
 }
